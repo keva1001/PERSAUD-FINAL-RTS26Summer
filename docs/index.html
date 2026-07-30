@@ -1,1 +1,84 @@
+Theme: ICU Bedside ECG Telemetry & Nurse Call System 
 
+	In this application, it's supposed to be a dual-core FreeRTOS pipeline on the ESP32. The system is to simulate an ICU bedside monitoring device which should continuously acquire patient telemetry and then analyze that data for any abnormal vital signs and then coordinates processing using IPC primitives and then dispatches an alert automatically or to a nurse-call interrupt.  
+
+ 
+Video Link: 
+
+System Architecture:  
+
+	This real-time task consists of four tasks:  
+
+Task A -> Telemetry Sampler (P8, C1): This task is to sample ECG, heart rate, and O2 every 50ms and then send one medical _ telemetry _ t packet to the queue. T 
+
+Task B -> Arrhythmia Processor (P8, C1): Waits for the queued telemetry and then analyzes the sample for any abnormal heart rhythms and then stores the latest diagnosis.  
+
+Task C -> Pipeline Coordinator (P9, C1): Waits for both the producer and consumer’s works to be completed and then use their work in an event group rendezvous before triggering the next pipeline stage.  
+
+Task D-> Alarm Dispatch Actuator (P12, C1): Waits for a direct task notification and then immediately dispatches an automatic alarm or responds to a manual nurse- call interrupt.  
+
+The Http monitor server executes independently on Core 0 so that network traffic and web page generation can't interfere with deterministic scheduling on the real-time processing core. 
+
+ 
+
+Engineering Analysis Prompts:  
+
+Why pin the web server to Core 0? What goes wrong if it's on Core 1? 
+
+We pin the web server to core 0 since it preforms non-real-time operations like Wi-fi communication, handling HTTP requests, refreshing the dashboard, or generating HTML pages. Since these operations are unpredictable and could block while waiting for any network activity, keeping the webserver on core 0 let's core 1 remain dedicated to all real-time telemetry pipeline (tasks A-D) which ensures deterministic scheduling and lower latency. If it's on core 1, then it would conflict and compete with the real-time tasks for CPU time. This could potentially increase scheduling delays and cause the producer or consumer to miss a deadline, or the queue occupancy may increase or overflow and we could potentially miss or delay critical alarm notifications which is detrimental to the patients. When we separate the webserver to core 0, it helps to improve system responsiveness and helps to maintain predictable real-time performance.  
+
+Queue depth — how sized? Compute the burst rate you protect against. 
+
+The queue depth was configured as 10 items. This is because the producer task normally generates one telemetry sample every 50ms/ 20 Hz and since each queue entry will store one telemetry packet the queue depth is 10 samples over the sampling period of 50ms/sample which when multiplied by one another is 500ms. Thus, the queue can buffer approximately 500ms of telemetry data before it is full, which means that it can handle half a second of temporary processing delays before a sample gets dropped. If the producer can't process the data within this time, then the producer increments the dropped_samples counter when the xQueueSend() fails.  
+
+The queue transfers object of type medical_ telemetry_ t from Task A to Task B. The producer is task A (50ms periodic sampler), the consumer is task B (the block waiting for new telemetry), and the queue depth is 10 entries. The producer timeout is when the producer attempts to enqueue a short timeout and if the queue remains full then the new sample is dropped and the dropped sample counter gets incremented instead of re-writing older telemetry information as if should. The consumer timeout is when task B has to wait up to 100ms for a new telemetry reading before it times out. This contract ensures that telemetry is processed by FIFO while preventing the producer from blocking long enough to miss the 50ms sampling deadline.  
+
+Event group vs N semaphores — when is each better? 
+
+An event group is better when a task must wait for multiple events simultaneously. In this application, Task C has to wait for both Task A which places the telemetry in the queue and task B which is the consumer that has to finish processing that telemetry. This is an AND-wait synchronization pattern which is what event groups are made for. N semaphores are better when signaling individual events or controlling access to shared resources. For this application, the coordinator waits until both the producer and consumer have both completed by waiting for the produced and processed bits.  
+
+ 
+
+Direct notification vs binary semaphore — measure both wakeup latencies. 
+
+The average latency of direct task notification based on one of the runs I did is about (30 + 30 + 32 + 29 + 31 + 29 + 30 + 20) / 8 = 28.9 μs and the average latency of the binary semaphore is about (152 + 257 + 793 + 528 + 690 + 575 + 717 + 448)/8 = 520 μs. Therefore, the semaphore took about 18x longer (520/28.9) to wake than the direct notification. For this part, I measured the wakeup latency of both synchronization mechanisms via tweaking my existing code and testing in a new window in order to not disturb my current code. The direct task notification was consistently waking the waiting task in approximately 20-32 μs with an average calculated latency of 28.9 μs. The binary semaphore required more time; it ranged from 152- 793 μs with an average latency of 520 μs. This means that the direct task notification was approximately 18 times faster than the binary semaphore in this benchmark. Direct task notification provides a lower latency since they signal a task directly without allocating or managing any separate kernel objects. However, a binary semaphore is implemented as a queue object which includes additional overhead during operations that involve give/take. For one-one task signaling, direct task notifications are preferred since binary semaphores are better when there are multiple tasks waiting on the same event or when a separate synchronization object is needed.  
+
+ 
+
+FROM TERMINAL (adjusted my code on a separate workspace): 
+
+(WOKWI LINK TO CODE THAT GOT ME THE NUMBERS BELOW: https://wokwi.com/projects/470917097285193729) 
+
+ 
+
+ESP-ROM:esp32s3-20210327 
+Build:Mar 27 2021 
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT) 
+SPIWP:0xee 
+mode:DIO, clock div:1 
+load:0x3fce3808,len:0x370 
+load:0x403c9700,len:0x900 
+load:0x403cc700,len:0x2364 
+entry 0x403c98ac 
+--- FreeRTOS Interrupt Latency Benchmark --- 
+Benchmark running on GPIO 18. Press the button to trigger ISR... 
+ 
+[Notification] Wakeup Latency: 30 us 
+[Semaphore]    Wakeup Latency: 152 us 
+[Notification] Wakeup Latency: 30 us 
+[Semaphore]    Wakeup Latency: 257 us 
+[Notification] Wakeup Latency: 32 us 
+[Semaphore]    Wakeup Latency: 793 us 
+[Notification] Wakeup Latency: 29 us 
+[Semaphore]    Wakeup Latency: 528 us 
+[Notification] Wakeup Latency: 31 us 
+[Semaphore]    Wakeup Latency: 690 us 
+[Notification] Wakeup Latency: 29 us 
+[Semaphore]    Wakeup Latency: 575 us 
+[Notification] Wakeup Latency: 30 us 
+[Semaphore]    Wakeup Latency: 717 us 
+[Notification] Wakeup Latency: 20 us 
+[Semaphore]    Wakeup Latency: 448 us 
+ 
+
+ 
