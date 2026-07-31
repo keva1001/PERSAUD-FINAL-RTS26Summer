@@ -749,3 +749,7 @@ my .md file.
 o https://chatgpt.com/share/6a6bef51-6c5c-83ea-8b15-94c92d89099d
 
 ![Page 21](md_images/page_21.png)
+
+-
+ I also used AI to help me build my index.html file so that everything gets displayed correctly. 
+ o https://claude.ai/share/0c509195-ef29-4210-ab5a-2b9be6cc7f66
