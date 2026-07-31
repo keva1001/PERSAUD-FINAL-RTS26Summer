@@ -3,298 +3,558 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ICU Bedside ECG Telemetry &amp; Nurse-Call System — Dual-Core FreeRTOS on ESP32</title>
+<meta name="description" content="A dual-core FreeRTOS pipeline on ESP32 that simulates an ICU bedside monitor: telemetry sampling, arrhythmia analysis, pipeline coordination, and alarm dispatch.">
 
-<title>ICU Bedside ECG Telemetry & Nurse Call System</title>
-
-<meta name="description" content="Dual-core FreeRTOS ICU bedside monitor running on the ESP32-S3 demonstrating deterministic real-time scheduling, inter-process communication, interrupt handling, and medical telemetry processing.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
 <style>
-body{
-    font-family:Arial,Helvetica,sans-serif;
-    max-width:1100px;
-    margin:auto;
-    padding:40px;
-    line-height:1.6;
-    background:#fafafa;
-    color:#222;
-}
+  :root{
+    --bg: #070b0a;
+    --bg-raised: #0d1513;
+    --panel: #101a17;
+    --panel-line: #1c2b27;
+    --text: #dcece6;
+    --text-dim: #7fa398;
+    --green: #2fe07f;
+    --green-dim: #1c8a52;
+    --cyan: #2dd4e8;
+    --amber: #ffb020;
+    --red: #ff4d4d;
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+  }
 
-h1{
-    color:#005b96;
-    border-bottom:3px solid #0d6efd;
-}
+  *{ box-sizing: border-box; }
+  html{ scroll-behavior: smooth; }
 
-h2{
-    margin-top:45px;
-    color:#0d6efd;
-}
+  body{
+    margin:0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
 
-section{
-    margin-bottom:50px;
-}
+  body::before{
+    content:"";
+    position: fixed;
+    inset:0;
+    pointer-events: none;
+    background-image: repeating-linear-gradient(0deg, rgba(47,224,127,0.025) 0px, rgba(47,224,127,0.025) 1px, transparent 1px, transparent 3px);
+    z-index: 1;
+  }
 
-table{
-    border-collapse:collapse;
-    width:100%;
-}
+  a{ color: var(--green); }
 
-th,td{
-    border:1px solid #ddd;
-    padding:10px;
-}
+  .wrap{
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0 28px;
+  }
 
-th{
-    background:#0d6efd;
-    color:white;
-}
+  /* ---------- NAV ---------- */
+  nav{
+    position: sticky; top:0; z-index: 20;
+    background: rgba(7,11,10,0.86);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--panel-line);
+  }
+  nav .wrap{
+    display:flex; align-items:center; justify-content: space-between;
+    padding: 14px 28px;
+  }
+  .nav-brand{
+    display:flex; align-items:center; gap:10px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+  }
+  .nav-brand .dot{
+    width:8px; height:8px; border-radius:50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: blip 1.4s infinite ease-in-out;
+  }
+  @keyframes blip{ 0%,100%{opacity:1;} 50%{opacity:.25;} }
+  .nav-links{ display:flex; gap:22px; font-size: 13px; }
+  .nav-links a{ color: var(--text-dim); text-decoration:none; font-family: var(--font-mono); }
+  .nav-links a:hover{ color: var(--green); }
 
-.code{
-    background:#f4f4f4;
-    padding:20px;
-    overflow-x:auto;
-    border-radius:8px;
-    font-family:monospace;
-}
+  /* ---------- HERO / MONITOR ---------- */
+  header.hero{
+    padding: 64px 0 40px;
+    position: relative;
+    z-index: 2;
+  }
+  .eyebrow{
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    display:flex; align-items:center; gap:10px;
+    margin-bottom: 18px;
+  }
+  .eyebrow::before{
+    content:"";
+    width: 22px; height:1px; background: var(--cyan);
+  }
+  h1{
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(32px, 5vw, 52px);
+    line-height: 1.08;
+    margin: 0 0 18px;
+    letter-spacing: -0.01em;
+  }
+  h1 span{ color: var(--green); }
+  .hero-sub{
+    color: var(--text-dim);
+    font-size: 17px;
+    max-width: 620px;
+    margin: 0 0 32px;
+  }
+  .hero-cta{ display:flex; gap:12px; flex-wrap: wrap; margin-bottom: 48px; }
+  .btn{
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 11px 18px;
+    border-radius: 6px;
+    text-decoration: none;
+    border: 1px solid var(--panel-line);
+    transition: border-color .15s, transform .15s, background .15s;
+    display:inline-flex; align-items:center; gap:8px;
+  }
+  .btn-primary{
+    background: var(--green);
+    color: #06110b;
+    border-color: var(--green);
+    font-weight: 600;
+  }
+  .btn-primary:hover{ transform: translateY(-1px); }
+  .btn-ghost{ color: var(--text); }
+  .btn-ghost:hover{ border-color: var(--green); color: var(--green); }
 
-iframe{
-    width:100%;
-    aspect-ratio:16/9;
-    border:none;
-}
+  /* monitor panel */
+  .monitor{
+    background: var(--panel);
+    border: 1px solid var(--panel-line);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(47,224,127,0.04), 0 30px 60px -30px rgba(0,0,0,0.7);
+  }
+  .monitor-topbar{
+    display:flex; justify-content: space-between; align-items:center;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--panel-line);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+  }
+  .monitor-topbar .status{ color: var(--green); }
+  .monitor-body{
+    display:grid;
+    grid-template-columns: 1fr 200px;
+  }
+  @media (max-width: 640px){ .monitor-body{ grid-template-columns: 1fr; } }
 
-img{
-    max-width:100%;
-}
+  .wave-area{ position: relative; padding: 18px 0 4px; }
+  svg.trace{ display:block; width:100%; height: 130px; }
+  .trace-line{
+    fill:none; stroke: var(--green); stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+    filter: drop-shadow(0 0 4px rgba(47,224,127,0.6));
+    stroke-dasharray: 900;
+    animation: sweep 3.2s linear infinite;
+  }
+  @keyframes sweep{ to{ stroke-dashoffset: -1800; } }
+  .trace-line.spo2{ stroke: var(--cyan); animation-duration: 4.1s; filter: drop-shadow(0 0 4px rgba(45,212,232,0.55)); opacity:.75; }
 
-.button{
-    display:inline-block;
-    background:#0d6efd;
-    color:white;
-    text-decoration:none;
-    padding:12px 18px;
-    border-radius:8px;
-    margin-top:10px;
-}
+  .vitals{
+    border-left: 1px solid var(--panel-line);
+    padding: 14px 18px;
+    display:flex; flex-direction: column; gap:16px;
+  }
+  .vital{ }
+  .vital .label{
+    font-family: var(--font-mono); font-size: 10px; letter-spacing:0.08em;
+    color: var(--text-dim); text-transform: uppercase;
+  }
+  .vital .value{
+    font-family: var(--font-mono); font-size: 26px; font-weight:600;
+    color: var(--green);
+  }
+  .vital.cyan .value{ color: var(--cyan); }
+  .vital.amber .value{ color: var(--amber); }
+  .vital .unit{ font-size: 12px; color: var(--text-dim); font-weight:400; }
+
+  /* ---------- SECTIONS ---------- */
+  section{ padding: 56px 0; border-top: 1px solid var(--panel-line); position: relative; z-index: 2; }
+  .section-head{ display:flex; align-items: baseline; gap:14px; margin-bottom: 28px; }
+  .section-num{ font-family: var(--font-mono); color: var(--green-dim); font-size: 13px; }
+  h2{
+    font-family: var(--font-display); font-size: 26px; margin:0;
+    letter-spacing: -0.01em;
+  }
+  p{ color: #c3d6cf; max-width: 720px; }
+  .lede{ color: var(--text-dim); max-width: 680px; margin-top: -14px; margin-bottom: 30px; }
+
+  /* task table */
+  .task-grid{ display:grid; grid-template-columns: repeat(2,1fr); gap:14px; }
+  @media (max-width: 720px){ .task-grid{ grid-template-columns: 1fr; } }
+  .task-card{
+    background: var(--panel); border:1px solid var(--panel-line); border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .task-card .task-id{
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
+    display:flex; justify-content: space-between; margin-bottom:8px;
+  }
+  .badge{
+    font-family: var(--font-mono); font-size: 10.5px;
+    padding: 2px 8px; border-radius: 20px;
+    border: 1px solid var(--panel-line); color: var(--text-dim);
+  }
+  .badge.prio{ color: var(--amber); border-color: rgba(255,176,32,0.3); }
+  .task-card h3{
+    font-family: var(--font-display); font-size: 17px; margin: 0 0 8px;
+  }
+  .task-card p{ font-size: 14px; margin:0; color: var(--text-dim); }
+
+  /* qa blocks */
+  .qa{
+    background: var(--panel); border:1px solid var(--panel-line); border-radius: 10px;
+    padding: 22px 24px; margin-bottom: 18px;
+  }
+  .qa .q{
+    font-family: var(--font-mono); font-size: 13px; color: var(--cyan);
+    margin: 0 0 10px;
+  }
+  .qa .q::before{ content:"Q · "; color: var(--text-dim); }
+  .qa p{ font-size: 15px; color: #c3d6cf; margin: 0; max-width: none; }
+  .qa p + p{ margin-top: 10px; }
+
+  code, .inline-mono{ font-family: var(--font-mono); font-size: 0.92em; color: var(--cyan); }
+
+  /* latency bars */
+  .latency{
+    background: var(--panel); border:1px solid var(--panel-line); border-radius: 10px;
+    padding: 22px 24px; margin-top: 4px;
+  }
+  .lat-row{ margin-bottom: 16px; }
+  .lat-row:last-child{ margin-bottom:0; }
+  .lat-label{
+    display:flex; justify-content: space-between; font-family: var(--font-mono);
+    font-size: 12.5px; color: var(--text-dim); margin-bottom: 6px;
+  }
+  .lat-label b{ color: var(--text); font-weight:500; }
+  .lat-track{ background: var(--bg-raised); border-radius: 5px; height: 10px; overflow:hidden; border:1px solid var(--panel-line); }
+  .lat-fill{ height:100%; border-radius: 5px; }
+  .lat-fill.notif{ width: 5.5%; background: var(--green); box-shadow: 0 0 8px rgba(47,224,127,.5); }
+  .lat-fill.sem{ width: 100%; background: var(--amber); box-shadow: 0 0 8px rgba(255,176,32,.4); }
+  .lat-foot{ font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); margin-top:14px; }
+  .lat-foot b{ color: var(--green); }
+
+  /* video */
+  .video-frame{
+    aspect-ratio: 16/9;
+    background: repeating-linear-gradient(135deg, #0b1210, #0b1210 10px, #0d1613 10px, #0d1613 20px);
+    border:1px solid var(--panel-line);
+    border-radius: 10px;
+    display:flex; align-items:center; justify-content:center;
+    flex-direction: column; gap: 10px;
+    color: var(--text-dim);
+    text-align:center;
+    padding: 20px;
+  }
+  .video-frame .no-signal{
+    font-family: var(--font-mono); letter-spacing: 0.15em; font-size: 13px;
+    color: var(--amber);
+  }
+  .video-frame small{ max-width: 420px; font-size: 12.5px; }
+  .video-frame.has-video{ padding:0; background:#000; }
+  .video-frame.has-video iframe{ width:100%; height:100%; border:0; border-radius:10px; }
+
+  /* doc cards */
+  .doc-grid{ display:grid; grid-template-columns: repeat(3,1fr); gap:14px; }
+  @media (max-width: 760px){ .doc-grid{ grid-template-columns: 1fr; } }
+  .doc-card{
+    background: var(--panel); border:1px solid var(--panel-line); border-radius:10px;
+    padding: 18px 20px; text-decoration:none; display:block;
+    transition: border-color .15s, transform .15s;
+  }
+  .doc-card:hover{ border-color: var(--green); transform: translateY(-2px); }
+  .doc-card .fname{ font-family: var(--font-mono); font-size: 12px; color: var(--green); margin-bottom:6px; }
+  .doc-card h4{ font-family: var(--font-display); font-size: 15px; margin: 0 0 6px; color: var(--text); }
+  .doc-card span.desc{ font-size: 13px; color: var(--text-dim); }
+
+  footer{
+    border-top: 1px solid var(--panel-line);
+    padding: 34px 0 50px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    display:flex; justify-content: space-between; flex-wrap:wrap; gap:10px;
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .trace-line, .nav-brand .dot { animation: none !important; }
+  }
 </style>
-
 </head>
-
 <body>
 
-<h1>ICU Bedside ECG Telemetry & Nurse Call System</h1>
-
-<p>
-A dual-core FreeRTOS pipeline running on the ESP32-S3 that simulates an ICU bedside
-monitor capable of acquiring ECG, heart rate, and SpO₂ telemetry, detecting
-arrhythmias in real time, coordinating processing using FreeRTOS IPC primitives,
-and dispatching automatic alarms or manual nurse-call interrupts.
-</p>
-
-<a class="button" href="../README.md">View Full Documentation</a>
-
-<hr>
-
-<h2>Project Demo</h2>
-
-<p>Add your YouTube video below.</p>
-
-<iframe
-src="https://www.youtube.com/embed/YOUR_VIDEO_ID"
-allowfullscreen>
-</iframe>
-
-<p>
-Or open the Wokwi simulation:
-</p>
-
-<a class="button"
-href="https://wokwi.com/projects/470915869059743745">
-Open Wokwi Demo
-</a>
-
-<hr>
-
-<h2>System Architecture</h2>
-
-<img src="architecture.svg" alt="System Architecture">
-
-<p>
-The system is implemented as a deterministic dual-core real-time pipeline.
-Four FreeRTOS tasks execute on Core 1 while an HTTP monitoring server runs
-independently on Core 0.
-</p>
-
-<table>
-
-<tr>
-<th>Task</th>
-<th>Description</th>
-</tr>
-
-<tr>
-<td>Task A – Telemetry Sampler</td>
-<td>Samples ECG, Heart Rate and SpO₂ every 50 ms and places one medical_telemetry_t packet into the queue.</td>
-</tr>
-
-<tr>
-<td>Task B – Arrhythmia Processor</td>
-<td>Receives telemetry from the queue, analyzes patient rhythm, and stores the latest diagnosis.</td>
-</tr>
-
-<tr>
-<td>Task C – Pipeline Coordinator</td>
-<td>Uses an Event Group rendezvous to synchronize producer and consumer before advancing the pipeline.</td>
-</tr>
-
-<tr>
-<td>Task D – Alarm Dispatch</td>
-<td>Waits on a Direct Task Notification to dispatch alarms or respond to manual nurse-call interrupts.</td>
-</tr>
-
-</table>
-
-<hr>
-
-<h2>Why is the Web Server on Core 0?</h2>
-
-<p>
-The HTTP monitoring server performs non-real-time operations including Wi-Fi
-communication, HTTP request processing, HTML generation, and dashboard updates.
-These activities are inherently unpredictable and could delay real-time tasks if
-they executed on Core 1.
-</p>
-
-<p>
-Keeping the web server on Core 0 isolates network activity from the telemetry
-pipeline, allowing Core 1 to execute deterministic scheduling with predictable
-latency. If the web server were moved to Core 1, producer and consumer tasks
-could miss deadlines, queue occupancy could increase, and alarm notifications
-could be delayed.
-</p>
-
-<hr>
-
-<h2>Queue Design</h2>
-
-<p>
-
-Queue depth = <b>10 telemetry packets</b>
-
-</p>
-
-<p>
-
-Telemetry sampling period = <b>50 ms</b>
-
-</p>
-
-<p>
-
-Protection window =
-
-<b>
-
-10 × 50 ms = 500 ms
-
-</b>
-
-</p>
-
-<p>
-
-This allows the queue to absorb approximately half a second of temporary
-processing delays before samples are dropped.
-
-</p>
-
-<hr>
-
-<h2>Event Groups vs Semaphores</h2>
-
-<p>
-
-Event Groups are ideal when one task must wait for multiple events
-simultaneously.
-
-Task C waits until both Task A and Task B complete before continuing the
-processing pipeline.
-
-</p>
-
-<p>
-
-Binary semaphores are better suited for signaling a single event or protecting
-shared resources.
-
-</p>
-
-<hr>
-
-<h2>Direct Notification vs Binary Semaphore</h2>
-
-<table>
-
-<tr>
-<th>Mechanism</th>
-<th>Average Wakeup Latency</th>
-</tr>
-
-<tr>
-<td>Direct Task Notification</td>
-<td>28.9 μs</td>
-</tr>
-
-<tr>
-<td>Binary Semaphore</td>
-<td>520 μs</td>
-</tr>
-
-</table>
-
-<p>
-
-Direct Task Notifications were approximately <strong>18× faster</strong> than binary
-semaphores because they signal a task directly without creating or managing a
-kernel queue object.
-
-</p>
-
-<hr>
-
-<h2>Benchmark Output</h2>
-
-<pre class="code">
-[Notification] Wakeup Latency: 30 us
-[Semaphore] Wakeup Latency: 152 us
-
-[Notification] Wakeup Latency: 30 us
-[Semaphore] Wakeup Latency: 257 us
-
-[Notification] Wakeup Latency: 32 us
-[Semaphore] Wakeup Latency: 793 us
-
-...
-
-Average Notification = 28.9 μs
-
-Average Semaphore = 520 μs
-
-≈18× faster
-</pre>
-
-<hr>
-
-<h2>Additional Documentation</h2>
-
-<ul>
-
-<li><a href="task-table.html">Task Timing & WCET</a></li>
-
-<li><a href="hazard-analysis.html">Hazard Analysis</a></li>
-
-<li><a href="../README.md">Full Project README</a></li>
-
-</ul>
+<nav>
+  <div class="wrap">
+    <div class="nav-brand"><span class="dot"></span> BED&nbsp;04&nbsp;·&nbsp;TELEMETRY&nbsp;ONLINE</div>
+    <div class="nav-links">
+      <a href="#architecture">Architecture</a>
+      <a href="#analysis">Analysis</a>
+      <a href="#demo">Demo</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/" target="_blank" rel="noopener">Repo ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Dual-Core FreeRTOS · ESP32</div>
+    <h1>ICU bedside ECG telemetry<br>&amp; <span>nurse-call</span> system</h1>
+    <p class="hero-sub">
+      A real-time simulation of an ICU bedside monitor. Core&nbsp;1 runs a four-task
+      producer–consumer pipeline that samples ECG, heart rate, and O₂, screens every
+      sample for arrhythmia, and fires an alarm within microseconds. Core&nbsp;0 carries
+      the Wi‑Fi dashboard — deliberately kept off the critical path.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="#demo">▶ Watch the demo</a>
+      <a class="btn btn-ghost" href="#architecture">View architecture</a>
+      <a class="btn btn-ghost" href="task-table.md">Task table + WCET evidence</a>
+    </div>
+
+    <div class="monitor">
+      <div class="monitor-topbar">
+        <span>LEAD II · SpO₂ · TASK PIPELINE</span>
+        <span class="status">● ALL TASKS NOMINAL</span>
+      </div>
+      <div class="monitor-body">
+        <div class="wave-area">
+          <svg class="trace" viewBox="0 0 600 130" preserveAspectRatio="none">
+            <path class="trace-line" d="
+              M0,65 L40,65 L52,65 L58,20 L64,110 L70,40 L76,65 L88,65
+              L140,65 L152,65 L158,20 L164,110 L170,40 L176,65 L188,65
+              L240,65 L252,65 L258,20 L264,110 L270,40 L276,65 L288,65
+              L340,65 L352,65 L358,20 L364,110 L370,40 L376,65 L388,65
+              L440,65 L452,65 L458,20 L464,110 L470,40 L476,65 L488,65
+              L540,65 L552,65 L558,20 L564,110 L570,40 L576,65 L600,65
+            "/>
+            <path class="trace-line spo2" d="
+              M0,95 C20,85 30,70 45,72 C60,74 65,100 80,100 C100,100 105,75 130,74
+              C150,73 160,98 180,98 C200,98 205,73 230,72 C250,71 260,96 280,96
+              C300,96 305,71 330,70 C350,69 360,94 380,94 C400,94 405,69 430,68
+              C450,67 460,92 480,92 C500,92 505,67 530,66 C550,65 560,90 600,90
+            "/>
+          </svg>
+        </div>
+        <div class="vitals">
+          <div class="vital">
+            <div class="label">Heart rate</div>
+            <div class="value">78 <span class="unit">bpm</span></div>
+          </div>
+          <div class="vital cyan">
+            <div class="label">SpO₂</div>
+            <div class="value">98 <span class="unit">%</span></div>
+          </div>
+          <div class="vital amber">
+            <div class="label">Sample rate</div>
+            <div class="value">20 <span class="unit">Hz</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="overview">
+  <div class="wrap">
+    <div class="section-head"><span class="section-num">00</span><h2>Overview</h2></div>
+    <p>
+      The application models a two-core embedded pipeline the way an ICU monitor
+      actually behaves: continuous acquisition, continuous analysis, and a hard
+      guarantee that a nurse-call or automatic alarm reaches the actuator fast — no
+      matter what the network stack is doing. Four FreeRTOS tasks on Core&nbsp;1 form a
+      producer–consumer–coordinator–actuator chain, synchronized with a queue, an
+      event group, and a direct task notification. An independent HTTP monitor server
+      runs on Core&nbsp;0, isolated so that Wi‑Fi and HTML generation can never steal
+      cycles from the real-time path.
+    </p>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <div class="section-head"><span class="section-num">01</span><h2>System architecture</h2></div>
+    <p class="lede">Four tasks, one direction of flow, Core&nbsp;1 dedicated entirely to the real-time pipeline.</p>
+    <div class="task-grid">
+      <div class="task-card">
+        <div class="task-id"><span>TASK A</span><span><span class="badge prio">P8</span> <span class="badge">Core 1</span></span></div>
+        <h3>Telemetry Sampler</h3>
+        <p>Samples ECG, heart rate, and O₂ every 50 ms and pushes one <code class="inline-mono">medical_telemetry_t</code> packet onto the queue.</p>
+      </div>
+      <div class="task-card">
+        <div class="task-id"><span>TASK B</span><span><span class="badge prio">P8</span> <span class="badge">Core 1</span></span></div>
+        <h3>Arrhythmia Processor</h3>
+        <p>Blocks on the queue, analyzes each sample for abnormal rhythm, and stores the latest diagnosis.</p>
+      </div>
+      <div class="task-card">
+        <div class="task-id"><span>TASK C</span><span><span class="badge prio">P9</span> <span class="badge">Core 1</span></span></div>
+        <h3>Pipeline Coordinator</h3>
+        <p>Rendezvous point: waits on an event group for both the producer and consumer bits before triggering the next stage.</p>
+      </div>
+      <div class="task-card">
+        <div class="task-id"><span>TASK D</span><span><span class="badge prio">P12</span> <span class="badge">Core 1</span></span></div>
+        <h3>Alarm Dispatch Actuator</h3>
+        <p>Waits on a direct task notification and immediately dispatches an automatic alarm or a manual nurse-call interrupt.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="analysis">
+  <div class="wrap">
+    <div class="section-head"><span class="section-num">02</span><h2>Engineering analysis</h2></div>
+    <p class="lede">Four design questions, answered with the numbers that came out of the pipeline.</p>
+
+    <div class="qa">
+      <p class="q">Why pin the web server to Core 0? What goes wrong if it's on Core 1?</p>
+      <p>
+        The web server handles unpredictable, blocking work — Wi‑Fi I/O, HTTP requests,
+        dashboard HTML generation — none of which has a real-time deadline. Keeping it on
+        Core&nbsp;0 leaves Core&nbsp;1 dedicated to Tasks A–D, preserving deterministic
+        scheduling and low latency. Moved to Core&nbsp;1, it would compete with the
+        real-time tasks for CPU time: scheduling delays grow, the producer or consumer can
+        miss a deadline, queue occupancy climbs toward overflow, and alarm notifications
+        can be delayed — exactly the failure mode this architecture exists to prevent.
+      </p>
+    </div>
+
+    <div class="qa">
+      <p class="q">Queue depth — how sized? Compute the burst rate you protect against.</p>
+      <p>
+        Depth is 10 entries. Task A produces one packet every 50&nbsp;ms (20&nbsp;Hz), so
+        10 entries × 50&nbsp;ms = <b class="inline-mono">500&nbsp;ms</b> of buffered
+        telemetry — the pipeline can absorb up to half a second of consumer stall before
+        anything is lost. On a full queue, the producer's short-timeout
+        <code class="inline-mono">xQueueSend()</code> fails and the
+        <code class="inline-mono">dropped_samples</code> counter increments rather than
+        blocking Task A past its 50&nbsp;ms deadline. The consumer (Task B) waits up to
+        100&nbsp;ms for a new reading before timing out. Together this guarantees FIFO
+        delivery while protecting the sampler's real-time deadline over strict data
+        completeness.
+      </p>
+    </div>
+
+    <div class="qa">
+      <p class="q">Event group vs. N semaphores — when is each better?</p>
+      <p>
+        An event group wins when a task must wait for <i>multiple</i> conditions at once —
+        exactly Task C's job: it needs both the "produced" bit from Task A and the
+        "processed" bit from Task B before it can proceed. That's an AND-wait, which is
+        what event groups are built for. N semaphores are the better fit for signaling a
+        single event or gating access to a shared resource, not for a multi-condition
+        rendezvous like this one.
+      </p>
+    </div>
+
+    <div class="qa">
+      <p class="q">Direct notification vs. binary semaphore — measure both wakeup latencies.</p>
+      <p>
+        Benchmarked on an ESP32‑S3 (Wokwi) by triggering an ISR on a GPIO button press and
+        timing the wakeup of each mechanism, eight runs each.
+      </p>
+      <div class="latency">
+        <div class="lat-row">
+          <div class="lat-label"><span>Direct task notification</span><b>avg 28.9 µs</b></div>
+          <div class="lat-track"><div class="lat-fill notif"></div></div>
+        </div>
+        <div class="lat-row">
+          <div class="lat-label"><span>Binary semaphore</span><b>avg 520 µs</b></div>
+          <div class="lat-track"><div class="lat-fill sem"></div></div>
+        </div>
+        <div class="lat-foot">
+          Notification range 20–32 µs · Semaphore range 152–793 µs ·
+          semaphore was <b>~18× slower</b> (520 / 28.9)
+        </div>
+      </div>
+      <p style="margin-top:16px;">
+        Direct notifications write straight into the receiving task's TCB, skipping the
+        kernel-object overhead a binary semaphore carries as a queue-based give/take.
+        For strict one-to-one signaling — Task D waiting on a single source — direct
+        notification is the right call. Binary semaphores remain the better tool when
+        multiple tasks wait on the same event or a distinct synchronization object is
+        genuinely needed.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="demo">
+  <div class="wrap">
+    <div class="section-head"><span class="section-num">03</span><h2>Demo</h2></div>
+    <p class="lede">Walkthrough of the pipeline running end-to-end, from telemetry sample to alarm dispatch.</p>
+
+    <!--
+      To embed the real video, replace the .video-frame div below with:
+      <div class="video-frame has-video">
+        <iframe src="https://www.youtube.com/embed/VIDEO_ID" title="Project demo"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowfullscreen></iframe>
+      </div>
+    -->
+    <div class="video-frame">
+      <div class="no-signal">NO SIGNAL</div>
+      <small>Demo video not yet linked — drop the embed URL into the <code class="inline-mono">.video-frame</code> block in index.html.</small>
+    </div>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <div class="section-head"><span class="section-num">04</span><h2>Further reading</h2></div>
+    <div class="doc-grid">
+      <a class="doc-card" href="architecture.svg">
+        <div class="fname">architecture.svg</div>
+        <h4>System diagram</h4>
+        <span class="desc">Full task, queue, and event-group wiring across both cores.</span>
+      </a>
+      <a class="doc-card" href="task-table.md">
+        <div class="fname">task-table.md</div>
+        <h4>Task table + WCET evidence</h4>
+        <span class="desc">Priorities, cores, periods, and worst-case execution time data.</span>
+      </a>
+      <a class="doc-card" href="hazard-analysis.md">
+        <div class="fname">hazard-analysis.md</div>
+        <h4>Hazard analysis</h4>
+        <span class="desc">Failure modes and their mapping to relevant safety standards.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="display:flex; justify-content:space-between; width:100%; flex-wrap:wrap; gap:10px;">
+    <span>ICU Bedside ECG Telemetry &amp; Nurse-Call System — ESP32 / FreeRTOS</span>
+    <span>Built with dual-core FreeRTOS · queue, event group, direct notification</span>
+  </div>
+</footer>
 
 </body>
 </html>
