@@ -1,79 +1,12 @@
-# Hazard Analysis & Standard Mapping
+## Hazard Analysis & Standard Mapping
 
-  ---------------------------------------------------------------------------------
-  Hazard            Potential Effect   Mitigation Implemented    Standard Mapping
-  ----------------- ------------------ ------------------------- ------------------
-  **Telemetry queue Patient telemetry  Queue depth of 10         **IEC 62304 §5.5**
-  overflow**        samples may be     provides a 500 ms buffer. -- Software
-                    dropped, delaying  Queue failures increment  implementation and
-                    arrhythmia         a dropped-sample counter  defensive error
-                    detection.         and are monitored         handling
-                                       continuously so overload  
-                                       is visible during         
-                                       testing.                  
-
-  **Missed          Critical cardiac   Producer, consumer,       **IEC 62304 §5.5**
-  arrhythmia        event may not      coordinator, and          -- Timing and
-  detection due to  trigger an alarm   responder execute as      implementation
-  delayed           in time.           deterministic FreeRTOS    controls
-  processing**                         tasks with measured WCET, 
-                                       fixed priorities, and     
-                                       schedulability analysis   
-                                       (RMS/EDF).                
-
-  **ISR blocking or Nurse-call button  ISR performs only minimal **IEC 62304 §5.5**
-  excessive         becomes            work, debounces the       -- Safe software
-  interrupt         unresponsive       button, and wakes the     implementation
-  latency**         during             responder task using      practices
-                    emergencies.       Direct Task Notification  
-                                       instead of performing     
-                                       lengthy processing inside 
-                                       the interrupt.            
-
-  **Race conditions Incorrect patient  Queue transfers telemetry **IEC 62304 §5.5**
-  between tasks**   state or           safely, Event Groups      -- Controlled
-                    inconsistent alarm synchronize processing    inter-process
-                    decisions.         stages, and Direct Task   communication
-                                       Notifications provide     
-                                       one-to-one signaling,     
-                                       preventing unsafe         
-                                       shared-state              
-                                       communication.            
-
-  **False alarm     Alarm fatigue may  Alarm is generated only   **IEC 62304 §5.7**
-  generation**      reduce operator    after telemetry is        -- Software system
-                    confidence.        processed and rhythm      testing and
-                                       thresholds indicate       verification
-                                       arrhythmia or hypoxemia.  
-                                       Coordinator ensures the   
-                                       complete processing       
-                                       pipeline finishes before  
-                                       responder activation.     
-
-  **Loss of system  Software failures  Core 0 continuously       **IEC 62304 §5.8**
-  observability**   become difficult   reports queue depth,      -- Verification
-                    to diagnose during event bits, heartbeats,   and maintenance
-                    operation.         WCET, dropped samples,    support
-                                       and alert counters        
-                                       without interfering with  
-                                       real-time execution on    
-                                       Core 1.                   
-
-  **Task execution  Real-time pipeline Maximum WCET is measured  **IEC 62304 §5.5**
-  exceeding         could become       for every task,           -- Real-time
-  deadline**        nondeterministic   utilization is            implementation
-                    and delay alarms.  calculated, and the task  verification
-                                       set is verified as        
-                                       schedulable under both    
-                                       RMS and EDF before        
-                                       deployment.               
-
-  **Failure of      Loss of            Monitoring executes       **IEC 62304 §5.3**
-  monitoring        diagnostics even   independently on Core 0   -- Software
-  interface**       if the telemetry   while the medical         architectural
-                    pipeline continues pipeline remains isolated design and
-                    running.           on Core 1, preventing     separation of
-                                       monitoring failures from  concerns
-                                       affecting patient-data    
-                                       processing.               
-  ---------------------------------------------------------------------------------
+| Hazard | Potential Effect | Mitigation Implemented | Standard Mapping |
+|--------|------------------|------------------------|------------------|
+| **Telemetry queue overflow** | Patient telemetry samples may be dropped, delaying arrhythmia detection. | Queue depth of 10 provides a 500 ms buffer. Queue failures increment a dropped-sample counter and are monitored continuously so overload is visible during testing. | **IEC 62304 §5.5** – Software implementation and defensive error handling |
+| **Missed arrhythmia detection due to delayed processing** | Critical cardiac events may not trigger an alarm in time. | Producer, consumer, coordinator, and responder execute deterministic FreeRTOS tasks with measured WCET, fixed priorities, and schedulability analysis (RMS/EDF). | **IEC 62304 §5.5** – Timing and implementation controls |
+| **ISR blocking or excessive interrupt latency** | Nurse-call button becomes unresponsive during emergencies. | ISR performs only minimal work, debounces the button, and wakes the responder task using Direct Task Notification instead of performing lengthy processing inside the interrupt. | **IEC 62304 §5.5** – Safe software implementation practices |
+| **Race conditions between tasks** | Incorrect patient state or inconsistent alarm decisions. | Queue transfers telemetry safely, Event Groups synchronize processing stages, and Direct Task Notifications provide one-to-one signaling, preventing unsafe shared-state communication. | **IEC 62304 §5.5** – Controlled inter-process communication |
+| **False alarm generation** | Alarm fatigue may reduce operator confidence. | Alarm is generated only after telemetry is processed and rhythm thresholds indicate arrhythmia or hypoxemia. Coordinator ensures the complete processing pipeline finishes before responder activation. | **IEC 62304 §5.7** – Software system testing and verification |
+| **Loss of system observability** | Software failures become difficult to diagnose during operation. | Core 0 continuously reports queue depth, event bits, heartbeats, WCET, dropped samples, and alert counters without interfering with real-time execution on Core 1. | **IEC 62304 §5.8** – Verification and maintenance support |
+| **Task execution exceeding deadline** | Real-time pipeline could become nondeterministic and delay alarms. | Maximum WCET is measured for every task, utilization is calculated, and the task set is verified as schedulable under both RMS and EDF before deployment. | **IEC 62304 §5.5** – Real-time implementation verification |
+| **Failure of monitoring interface** | Loss of diagnostics even if the telemetry pipeline continues running. | Monitoring executes independently on Core 0 while the medical pipeline remains isolated on Core 1, preventing monitoring failures from affecting patient-data processing. | **IEC 62304 §5.3** – Software architectural design and separation of concerns |
